@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Create a party</title>
+<style>
+  :root { --bg:#14181c; --panel:#1d2329; --line:#323b44; --text:#e8ecef; --muted:#93a0ab; --accent:#6fd36b; --err:#ff8a7a; }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:grid; place-items:center; padding:24px;
+         background:var(--bg); color:var(--text); font:16px/1.5 "Trebuchet MS", system-ui, sans-serif; }
+  main { width:100%; max-width:460px; background:var(--panel); border:2px solid var(--line); padding:28px; }
+  h1 { margin:0 0 4px; font-size:1.6rem; }
+  p.sub { margin:0 0 22px; color:var(--muted); }
+  label { display:block; margin:14px 0 6px; font-weight:bold; }
+  input { width:100%; padding:11px 12px; background:var(--bg); color:var(--text); border:2px solid var(--line); font:inherit; }
+  input:focus-visible, button:focus-visible { outline:3px solid var(--accent); outline-offset:2px; }
+  button { margin-top:18px; width:100%; padding:12px; border:0; background:var(--accent); color:#10240f; font:bold 1rem inherit; cursor:pointer; }
+  button.secondary { background:transparent; color:var(--text); border:2px solid var(--line); margin-top:10px; }
+  button:disabled { opacity:.6; cursor:wait; }
+  .msg { margin-top:14px; color:var(--err); min-height:1.4em; }
+  .code { font:bold 2.4rem/1.1 "Courier New", monospace; letter-spacing:.12em; margin:6px 0 14px; }
+  .link { word-break:break-all; padding:10px 12px; background:var(--bg); border:2px solid var(--line); }
+  [hidden] { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <section id="form">
+    <h1>Create a party</h1>
+    <p class="sub">Pick a server and get a link your friends can open to join it.</p>
+    <label for="server">Server address</label>
+    <input id="server" placeholder="zentic.cc" autocomplete="off" />
+    <label for="name">Party name (optional)</label>
+    <input id="name" maxlength="40" placeholder="Friday build night" autocomplete="off" />
+    <button id="create">Create party</button>
+    <div class="msg" id="err" role="alert"></div>
+  </section>
+
+  <section id="result" hidden>
+    <h1 id="rname">Your party is ready</h1>
+    <p class="sub" id="rserver"></p>
+    <div class="code" id="rcode"></div>
+    <div class="link" id="rlink"></div>
+    <button id="copy">Copy link</button>
+    <button class="secondary" id="join">Join now</button>
+    <button class="secondary" id="another">Create another</button>
+  </section>
+</main>
+
+<script>
+  const SUPABASE_URL = "https://uwpcgccammspgzocjsco.supabase.co";
+  const SUPABASE_KEY = "sb_publishable_VovyqA7vY-IVd2qke-sCRg_l1LdpMMV";
+  const HEAD = { apikey: SUPABASE_KEY, Authorization: "Bearer " + SUPABASE_KEY, "Content-Type": "application/json" };
+  const ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"; // no look-alike characters
+  const $ = id => document.getElementById(id);
+
+  function makeCode(len = 5) {
+    const bytes = crypto.getRandomValues(new Uint8Array(len));
+    return Array.from(bytes, b => ALPHABET[b % ALPHABET.length]).join("");
+  }
+
+  function normalizeServer(input) {
+    let s = input.trim();
+    if (!/^wss?:\/\//i.test(s)) s = "wss://" + s;
+    try { const u = new URL(s); return /^wss?:$/.test(u.protocol) ? u.href : null; } catch { return null; }
+  }
+
+  function show(code, server, name) {
+    const link = location.origin + "/party=" + code;
+    $("form").hidden = true; $("result").hidden = false;
+    $("rname").textContent = name || "Your party is ready";
+    $("rserver").textContent = "Server: " + server.replace(/^wss?:\/\//, "").replace(/\/$/, "");
+    $("rcode").textContent = code;
+    $("rlink").textContent = link;
+    $("join").onclick = () => location.href = link;
+    $("copy").onclick = async () => {
+      try { await navigator.clipboard.writeText(link); $("copy").textContent = "Copied"; }
+      catch { $("copy").textContent = "Select the link and copy it"; }
+      setTimeout(() => $("copy").textContent = "Copy link", 1800);
+    };
+  }
+
+  $("create").onclick = async () => {
+    $("err").textContent = "";
+    const server = normalizeServer($("server").value);
+    if (!server) { $("err").textContent = "Enter a valid server address, like zentic.cc."; return; }
+    const name = $("name").value.trim() || null;
+    $("create").disabled = true;
+    try {
+      for (let i = 0; i < 5; i++) {
+        const code = makeCode();
+        const res = await fetch(SUPABASE_URL + "/rest/v1/parties", {
+          method: "POST",
+          headers: { ...HEAD, Prefer: "return=minimal" },
+          body: JSON.stringify({ code, server, name })
+        });
+        if (res.status === 409) continue; // code already taken, try another
+        if (!res.ok) throw new Error("Could not save the party (" + res.status + ").");
+        history.replaceState(null, "", "?party=" + code);
+        show(code, server, name);
+        return;
+      }
+      throw new Error("Could not find a free party code. Try again.");
+    } catch (e) { $("err").textContent = e.message; }
+    finally { $("create").disabled = false; }
+  };
+
+  $("another").onclick = () => {
+    history.replaceState(null, "", location.pathname);
+    $("result").hidden = true; $("form").hidden = false;
+  };
+
+  // Opening /create/?party=CODE shows that party's share link
+  (async () => {
+    const code = new URLSearchParams(location.search).get("party");
+    if (!code || !/^[A-Za-z0-9_-]{1,32}$/.test(code)) return;
+    try {
+      const res = await fetch(SUPABASE_URL + "/rest/v1/parties?code=eq." + encodeURIComponent(code) + "&select=server,name", { headers: HEAD });
+      const rows = res.ok ? await res.json() : [];
+      if (rows[0]) show(code, rows[0].server, rows[0].name);
+      else $("err").textContent = "Party " + code + " was not found. Create a new one below.";
+    } catch { $("err").textContent = "Could not load that party."; }
+  })();
+</script>
+</body>
+</html>
